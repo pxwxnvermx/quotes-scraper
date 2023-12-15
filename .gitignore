@@ -1,5 +1,3 @@
-<<<<<<< HEAD
-demo.txt
-=======
- 
->>>>>>> fec6dd1 (Made the script faster)
+*.json
+.venv/
+venv/
