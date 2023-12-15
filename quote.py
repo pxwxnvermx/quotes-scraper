@@ -1,76 +1,67 @@
 #!/usr/bin/env python3
 # coding=utf-8
 
-import sys
-import requests
+import asyncio
+import httpx
 import json
 from bs4 import BeautifulSoup
 import argparse
-import lxml
-import cchardet
-import time
-import concurrent.futures
+import logging
 
-MAX_THREADS = 30
 
-session = requests.Session()
+def get_pagination_range(page):
+    soup = BeautifulSoup(page.content, "lxml")
+    quote_div = soup.find("div", class_="quotes")
+    if not quote_div:
+        raise Exception()
+    page_numbers = list(
+        map(
+            int,
+            filter(
+                lambda x: x.isdigit(),
+                quote_div.find("div", class_="u-textAlignRight").get_text().split(),
+            ),
+        )
+    )
+    # only need pages from 2nd page as the first page is fetched already
+    return range(2, page_numbers[-1] + 1)
 
-def pagination():
-    webpage = session.get(url)
-    soup = BeautifulSoup(webpage.content,'lxml')
-    page_numbers = soup.find("div",class_="quotes").find("div",attrs={"style":"text-align: right; width: 100%"})
-    page_numbers = page_numbers.get_text().split()
-    return range(int(page_numbers[-3])+1)
 
-def get_quotes(quote_html):
-    for quote in quote_html:
-        quotes_list.append(quote_json(str(quote.get_text(strip=True))))
+def quote_json(quote_text):
+    quote, quote_info = quote_text.split("―")
+    author, *book = quote_info.split(",")
+    return dict(quote=quote, author=author, book="".join(book))
 
-def quote_json(quote):
-    quote_dir = quote.split("―")
-    quote_author = quote_dir[1].split(',')
-    quote_object = {
-            "quote" : quote_dir[0],
-            "author" : quote_author[0],
-            "book" : quote_author[1] if len(quote_author) == 2 else ""
-            }
-    return (quote_object)
 
-def resolvePage(pageno):
-    webpage_url = url + "?page="+str(pageno)
-    print(webpage_url)
-    page = session.get(webpage_url)
-    soup = BeautifulSoup(page.content,'lxml')
-    #results = soup.find('div',class_="quotes")
-    quote_html = soup.find_all('div',class_="quoteText")
-    get_quotes(quote_html)
+def resolve_page(page):
+    soup = BeautifulSoup(page.content, "lxml")
+    quote_html = [
+        quote.get_text(strip=True) for quote in soup.find_all("div", class_="quoteText")
+    ]
+    return list(map(quote_json, quote_html))
 
-def resolvePages(pages):
-#    for i in range(1,pages+1):
-    threads = min(MAX_THREADS, len(pages))
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
-        executor.map(resolvePage, pages)
-
-if __name__ == "__main__":
-    quotes_list = []
-    
+async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("url", help="Url of quotes page of author.")
-    parser.add_argument("--output", help="output to txt file. usage --output [filename]")
+    parser.add_argument(
+        "--output", help="output to txt file. usage --output [filename]"
+    )
     args = parser.parse_args()
+    filename = args.output + ".json" if args.output else "demo.json"
+    async with httpx.AsyncClient(timeout=30) as client:
+        page1 = await client.get(args.url)
+        page_numbers = get_pagination_range(page1)
+        page_urls = list(f"{args.url}?page={num}" for num in page_numbers)
+        pages = await asyncio.gather(*map(client.get, page_urls))
+        pages.append(page1)
+        quotes = list(map(resolve_page, pages))
 
-    url = args.url
-    
-    if args.output:
-        f = open(args.output+".txt", "w", encoding='utf-8')
-    else:
-        f = open("demo.txt", "w", encoding='utf-8')
+    with open(filename, "w", encoding="utf-8") as f:
+        logging.info("writing to file")
+        f.write(json.dumps(quotes, ensure_ascii=False, indent=4))
+    logging.info("done")
 
-    pages = pagination()
-    resolvePages(pages)
-    
-    f.write(json.dumps(quotes_list, ensure_ascii=False, indent=4))
-    f.close()
-    
-    print("Done\n")
+
+if __name__ == "__main__":
+    asyncio.run(main())
