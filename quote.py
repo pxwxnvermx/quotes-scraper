@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # coding=utf-8
 
-import asyncio
-import httpx
-import json
-from bs4 import BeautifulSoup
 import argparse
+import json
 import logging
+from time import sleep
+
+import httpx
+from bs4 import BeautifulSoup
 
 
 def get_pagination_range(page):
@@ -41,7 +42,7 @@ def resolve_page(page):
     return list(map(quote_json, quote_html))
 
 
-async def main():
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("url", help="Url of quotes page of author.")
     parser.add_argument(
@@ -49,12 +50,15 @@ async def main():
     )
     args = parser.parse_args()
     filename = args.output + ".json" if args.output else "demo.json"
-    async with httpx.AsyncClient(timeout=30) as client:
-        page1 = await client.get(args.url)
+    with httpx.Client() as client:
+        page1 = client.get(args.url)
         page_numbers = get_pagination_range(page1)
         page_urls = list(f"{args.url}?page={num}" for num in page_numbers)
-        pages = await asyncio.gather(*map(client.get, page_urls))
-        pages.append(page1)
+        pages = [page1]
+        for url in page_urls:
+            print(f"getting url {url}")
+            pages.append(client.get(url))
+            sleep(1)
         quotes = list(map(resolve_page, pages))
 
     with open(filename, "w", encoding="utf-8") as f:
@@ -64,4 +68,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
