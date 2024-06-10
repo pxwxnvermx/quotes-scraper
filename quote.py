@@ -3,12 +3,20 @@
 
 import argparse
 import json
+import asyncio
 import logging
-from time import sleep
+import sys
 
 import httpx
 from bs4 import BeautifulSoup
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 
 def get_pagination_range(page):
     soup = BeautifulSoup(page.content, "lxml")
@@ -24,8 +32,7 @@ def get_pagination_range(page):
             ),
         )
     )
-    # only need pages from 2nd page as the first page is fetched already
-    return range(2, page_numbers[-1] + 1)
+    return range(1, page_numbers[-1] + 1)
 
 
 def quote_json(quote_text):
@@ -34,7 +41,8 @@ def quote_json(quote_text):
     return dict(quote=quote, author=author, book="".join(book))
 
 
-def resolve_page(page):
+async def resolve_page(page_url, client):
+    page = await client.get(page_url)
     soup = BeautifulSoup(page.content, "lxml")
     quote_html = [
         quote.get_text(strip=True) for quote in soup.find_all("div", class_="quoteText")
@@ -42,30 +50,29 @@ def resolve_page(page):
     return list(map(quote_json, quote_html))
 
 
-def main():
+
+async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("url", help="Url of quotes page of author.")
     parser.add_argument(
         "--output", help="output to txt file. usage --output [filename]"
     )
     args = parser.parse_args()
-    filename = args.output + ".json" if args.output else "demo.json"
-    with httpx.Client() as client:
-        page1 = client.get(args.url)
-        page_numbers = get_pagination_range(page1)
-        page_urls = list(f"{args.url}?page={num}" for num in page_numbers)
-        pages = [page1]
-        for url in page_urls:
-            print(f"getting url {url}")
-            pages.append(client.get(url))
-            sleep(1)
-        quotes = list(map(resolve_page, pages))
+    filename = args.output + ".json" if args.output else "quotes.json"
 
+    async with httpx.AsyncClient() as client:
+        logging.info("Fetching page numbers")
+        page1 = await client.get(args.url)
+        page_numbers = get_pagination_range(page1)
+        logging.info(f"Total pages to fetch: {page_numbers[-1]}")
+        quotes = await asyncio.gather(*[resolve_page(f"{args.url}?page={num}", client) for num in page_numbers])
+        logging.info(f"Fetch done")
+    
     with open(filename, "w", encoding="utf-8") as f:
-        logging.info("writing to file")
+        logging.info(f"Saving to File {filename}")
         f.write(json.dumps(quotes, ensure_ascii=False, indent=4))
-    logging.info("done")
+    logging.info("Finished")
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
